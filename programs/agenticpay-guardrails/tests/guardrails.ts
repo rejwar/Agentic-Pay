@@ -299,6 +299,62 @@ describe("agenticpay-guardrails", () => {
     // Confirm the receipt exists on-chain for external observability.
     const receipt = await program.account.nonceReceipt.fetch(nonceReceiptPda);
     assert.equal(receipt.nonce.toString(), nonce.toString());
+    assert.equal(receipt.consumed, true);
+  });
+
+  it("correctly consumes nonce = 0 (no ambiguity)", async () => {
+    const nonce = new anchor.BN(0);
+    const amount = new anchor.BN(100_000);
+    const now = Math.floor(Date.now() / 1000);
+    const expiresAt = new anchor.BN(now + 300);
+
+    const canonical = createCanonicalMessage(
+      nonce,
+      agentKeypair.publicKey,
+      providerKeypair.publicKey,
+      amount,
+      expiresAt
+    );
+    const signature = nacl.sign.detached(canonical, agentKeypair.secretKey);
+
+    const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
+      publicKey: agentKeypair.publicKey.toBytes(),
+      message: canonical,
+      signature,
+      instructionIndex: 0,
+    });
+
+    const nonceReceiptPda = getNonceReceiptPda(nonce);
+
+    const settleIx = await program.methods
+      .batchSettleVouchers(canonical, providerKeypair.publicKey, amount, nonce, expiresAt)
+      .accounts({
+        escrow: escrowPda,
+        nonceReceipt: nonceReceiptPda,
+        provider: providerKeypair.publicKey,
+        instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        payer: agentKeypair.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+
+    // First submission with nonce = 0: must succeed.
+    const tx1 = new Transaction().add(ed25519Ix).add(settleIx);
+    await provider.sendAndConfirm(tx1, [agentKeypair]);
+
+    // Confirm receipt exists and consumed is true.
+    const receipt = await program.account.nonceReceipt.fetch(nonceReceiptPda);
+    assert.equal(receipt.nonce.toString(), "0");
+    assert.equal(receipt.consumed, true);
+
+    // Second submission with nonce = 0: must fail with NonceAlreadyUsed.
+    const tx2 = new Transaction().add(ed25519Ix).add(settleIx);
+    try {
+      await provider.sendAndConfirm(tx2, [agentKeypair]);
+      assert.fail("Replay with nonce = 0 should have been rejected");
+    } catch (err: any) {
+      expect(err.toString()).to.include("NonceAlreadyUsed");
+    }
   });
 
   it("Rejects voucher exceeding per-tx cap", async () => {

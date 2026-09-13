@@ -69,10 +69,10 @@ export default function Dashboard() {
         />
         <StatCard
           title="Pyth SOL Oracle"
-          value={solPrice ? `$${solPrice.price.toFixed(2)}` : "$148.52"}
-          subtitle={`±$${solPrice?.confidence.toFixed(3) ?? "0.074"} confidence`}
+          value={solPrice ? `$${solPrice.price.toFixed(2)}` : "OFFLINE"}
+          subtitle={solPrice ? `±$${solPrice.confidence.toFixed(3)} confidence` : "No oracle feed"}
           icon={<Activity className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />}
-          badge="Hermes L2"
+          badge={solPrice ? "Hermes L2" : "Offline"}
         />
         <StatCard
           title="Engine Decisions"

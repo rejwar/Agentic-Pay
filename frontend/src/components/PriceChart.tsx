@@ -73,19 +73,24 @@ export function PriceChart() {
         <div className="flex items-baseline justify-between mb-4 pb-3 border-b border-border">
           <div className="flex items-baseline gap-3">
             <span className="text-3xl font-extrabold font-mono text-foreground tracking-tight">
-              ${price ? price.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "---"}
+              {price ? `$${price.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "OFFLINE"}
             </span>
-            <span className="text-xs text-emerald-600 dark:text-emerald-400 font-mono flex items-center gap-1 font-semibold">
-              <TrendingUp className="h-3 w-3" />
-              ±${price ? price.confidence.toFixed(3) : "0.000"} (
-              {price?.confidenceBps ?? 5} bps)
-            </span>
+            {price ? (
+              <span className="text-xs text-emerald-600 dark:text-emerald-400 font-mono flex items-center gap-1 font-semibold">
+                <TrendingUp className="h-3 w-3" />
+                ±${price.confidence.toFixed(3)} ({price.confidenceBps} bps)
+              </span>
+            ) : (
+              <span className="text-xs text-muted-foreground font-mono">
+                Awaiting oracle feed
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-2 text-xs text-muted-foreground font-mono">
             <Zap className="h-3.5 w-3.5 text-amber-500 dark:text-amber-400" />
-            <span>Feed: <strong className="text-foreground">Hermes L2</strong></span>
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            <span>Feed: <strong className="text-foreground">{price ? "Hermes L2" : "Offline"}</strong></span>
+            <span className={`h-1.5 w-1.5 rounded-full ${price ? "bg-emerald-500 animate-pulse" : "bg-muted-foreground"}`} />
           </div>
         </div>
 
