@@ -6,10 +6,14 @@ use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, Signer};
 
+use agent_backend::agent_loop::AgentLoop;
+use agent_backend::client::X402Client;
 use agent_backend::config::Config;
+use agent_backend::decision::{EvaluatorConfig, FixedPointEvaluator};
 use agent_backend::rpc::{AgentRpcServer, RpcServer};
 use agent_backend::solana_rpc::AsyncSolanaProvider;
 use agent_backend::state::{self, ServerState};
+use agent_backend::wallet::AgentWallet;
 use agent_backend::worker::{SettlementWorker, WorkerConfig};
 
 #[tokio::main]
@@ -59,6 +63,28 @@ async fn main() -> anyhow::Result<()> {
 
     tokio::spawn(async move {
         worker.run().await;
+    });
+
+    // Configure and spawn the autonomous execution loop
+    let agent_wallet = Arc::new(AgentWallet::from_keypair(&agent_keypair));
+    let resource_url = std::env::var("RESOURCE_SERVER_URL")
+        .unwrap_or_else(|_| "http://localhost:8080".into());
+    let x402_client = Arc::new(X402Client::new(resource_url, agent_wallet.clone())?);
+    let evaluator = Arc::new(FixedPointEvaluator::new(EvaluatorConfig::default()));
+    let trading_symbol = std::env::var("TRADING_PAIR").unwrap_or_else(|_| "SOLUSDT".to_string());
+
+    let mut agent_loop = AgentLoop::new(
+        x402_client,
+        evaluator,
+        state.clone(),
+        agent_wallet,
+        trading_symbol,
+    );
+
+    tokio::spawn(async move {
+        if let Err(e) = agent_loop.run().await {
+            tracing::error!("Autonomous agent loop stopped: {}", e);
+        }
     });
 
     let rpc_impl = RpcServer::new(state, rpc_client);

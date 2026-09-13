@@ -33,12 +33,14 @@ impl SessionKey {
 pub struct NonceReceipt {
     /// The nonce this receipt was created for.
     pub nonce: u64,
+    /// Explicit flag indicating the nonce has been consumed.
+    pub consumed: bool,
     /// Unix timestamp when the receipt was created.
     pub created_at: i64,
 }
 
 impl NonceReceipt {
-    pub const LEN: usize = 8 + 8; // discriminator + nonce + created_at
+    pub const LEN: usize = 8 + 1 + 8;
 }
 
 #[event]

@@ -1,5 +1,5 @@
 //! Fixed‑point decision engine using integer arithmetic (no `f64`).
-//! Evaluates trade signals using Pyth price feeds and network fees.]
+//! Evaluates trade signals using Pyth price feeds and network fees.
 
 use crate::error::SignalFault;
 
@@ -47,17 +47,20 @@ impl Default for EvaluatorConfig {
 }
 
 // ---------- Trait ----------
-//this trait defind the logic of decision making and used in execution engine 
-pub trait AlpahaEvaluator:Send+Sync{
+/// Defines the decision-making interface used by the autonomous execution engine.
+pub trait AlphaEvaluator: Send + Sync {
     type EvalFault;
 
-    fn eveluate_expected_value(
-    &self,
-    feed:&PythPriceFeed,
-network_fee_lamports:u64,
-    target_edge_bps:u64,    
-    )->Result<ExecutionSignal,Self::EvalFault>;
+    fn evaluate_expected_value(
+        &self,
+        feed: &PythPriceFeed,
+        network_fee_lamports: u64,
+        target_edge_bps: u64,
+    ) -> Result<ExecutionSignal, Self::EvalFault>;
 }
+
+/// Backwards-compatibility alias for previous typo.
+pub use AlphaEvaluator as AlpahaEvaluator;
 
 // ---------- Implementation ----------
 
@@ -90,16 +93,15 @@ impl FixedPointEvaluator {
 
 
 
-impl AlpahaEvaluator for FixedPointEvaluator {
+impl AlphaEvaluator for FixedPointEvaluator {
     type EvalFault = SignalFault;
 
-    fn eveluate_expected_value(
-    &self,
-    feed:&PythPriceFeed,
-    network_fee_lamports:u64,
-    target_edge_bps:u64,    
-    )->Result<ExecutionSignal,Self::EvalFault>
-    {
+    fn evaluate_expected_value(
+        &self,
+        feed: &PythPriceFeed,
+        network_fee_lamports: u64,
+        target_edge_bps: u64,
+    ) -> Result<ExecutionSignal, Self::EvalFault> {
         if network_fee_lamports > self.config.max_fee_lamports {
             return Ok(ExecutionSignal::Reject(SignalFault::FeeExceedsMaxCap));
         }
@@ -128,6 +130,25 @@ impl AlpahaEvaluator for FixedPointEvaluator {
     }
 }
 
+// ---------- Value of Information (VOI) ----------
+
+/// Value of Information: evaluates whether purchasing premium oracle data yields
+/// a positive expected value given current confidence vs expected improved confidence.
+pub fn should_buy_data(
+    current_confidence_bps: u64,
+    expected_confidence_after: u64,
+    data_cost_bps: u64,
+    trade_size_bps: u64,
+) -> bool {
+    // Expected decision improvement from tighter confidence bounds.
+    let confidence_gain = expected_confidence_after.saturating_sub(current_confidence_bps);
+    // Expected value = gain * trade_size_bps / 10,000
+    let expected_value = (confidence_gain as u128)
+        .checked_mul(trade_size_bps as u128)
+        .and_then(|v| v.checked_div(10_000))
+        .unwrap_or(0) as u64;
+    expected_value > data_cost_bps
+}
 
 // ---------- Unit Tests ----------
 #[cfg(test)]
@@ -174,7 +195,7 @@ mod tests {
         };
         let fee = 1_000_000; // 0.001 SOL
         let edge = 200; // 2% edge
-        let signal = evaluator.eveluate_expected_value(&feed, fee, edge).unwrap();
+        let signal = evaluator.evaluate_expected_value(&feed, fee, edge).unwrap();
         assert_eq!(signal, ExecutionSignal::ExecuteLong);
     }
 
@@ -193,7 +214,7 @@ mod tests {
         };
         let fee = 5_000_000; // exceeds max
         let edge = 200;
-        let signal = evaluator.eveluate_expected_value(&feed, fee, edge).unwrap();
+        let signal = evaluator.evaluate_expected_value(&feed, fee, edge).unwrap();
         assert!(matches!(signal, ExecutionSignal::Reject(SignalFault::FeeExceedsMaxCap)));
     }
 
@@ -212,7 +233,7 @@ mod tests {
         };
         let fee = 1_000_000;
         let edge = 200;
-        let signal = evaluator.eveluate_expected_value(&feed, fee, edge).unwrap();
+        let signal = evaluator.evaluate_expected_value(&feed, fee, edge).unwrap();
         assert!(matches!(signal, ExecutionSignal::Reject(SignalFault::ConfidenceTooWide)));
     }
 
@@ -228,8 +249,20 @@ mod tests {
         };
         let fee = 5_000_000; // high fee (but within cap)
         let edge = 100; // 1% edge
-        let signal = evaluator.eveluate_expected_value(&feed, fee, edge).unwrap();
+        let signal = evaluator.evaluate_expected_value(&feed, fee, edge).unwrap();
         // Likely rejects due to negative EV.
         assert!(matches!(signal, ExecutionSignal::Reject(SignalFault::NegativeExpectedValue)));
+    }
+
+    #[test]
+    fn test_should_buy_data_voi() {
+        // Gain = 50 bps, trade_size = 10,000 (100%), EV = 50 bps. Cost = 10 bps -> Buy!
+        assert!(should_buy_data(20, 70, 10, 10_000));
+
+        // Gain = 5 bps, trade_size = 10,000, EV = 5 bps. Cost = 10 bps -> Do not buy!
+        assert!(!should_buy_data(20, 25, 10, 10_000));
+
+        // Confidence worsens or zero gain -> Do not buy!
+        assert!(!should_buy_data(50, 40, 5, 10_000));
     }
 }

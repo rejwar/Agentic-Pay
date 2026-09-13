@@ -42,13 +42,13 @@ pub fn handler(
     require!(clock.unix_timestamp <= expires_at, GuardrailError::VoucherExpired);
 
     // ─── Replay protection ────────────────────────────────────────────
-    // A receipt with nonce == 0 means "freshly created this instruction".
-    // Any other value means the nonce was already consumed.
+    // Explicit consumed flag prevents the nonce = 0 ambiguity edge case.
     require!(
-        ctx.accounts.nonce_receipt.nonce == 0,
+        !ctx.accounts.nonce_receipt.consumed,
         GuardrailError::NonceAlreadyUsed
     );
     ctx.accounts.nonce_receipt.nonce = nonce;
+    ctx.accounts.nonce_receipt.consumed = true;
     ctx.accounts.nonce_receipt.created_at = clock.unix_timestamp;
 
     // 5. Ed25519 verification.

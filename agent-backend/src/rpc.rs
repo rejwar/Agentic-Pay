@@ -3,6 +3,7 @@
 use crate::error::EngineError;
 use crate::solana_rpc::AsyncSolanaProvider;
 use crate::state::{NoncePhase, ServerState, SolanaRpcAdapter, TransactionStatus};
+use crate::voucher::VoucherCryptography;
 use base64::Engine;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use solana_sdk::{pubkey::Pubkey, signature::Signature};
@@ -50,6 +51,16 @@ pub trait AgentRpc {
     /// `agent_pubkey` – Base58‑encoded agent public key.
     #[method(name = "getInFlightCount")]
     async fn get_in_flight_count(&self, agent_pubkey: String) -> RpcResult<usize>;
+
+    /// Calculate Value of Information (VOI): whether buying premium oracle data
+    /// yields positive expected value given current confidence vs expected confidence.
+    #[method(name = "shouldBuyData")]
+    async fn should_buy_data(
+        &self,
+        current_confidence_bps: u64,
+        expected_after: u64,
+        data_cost_bps: u64,
+    ) -> RpcResult<bool>;
 }
 
 // ---------- Server Implementation ----------
@@ -154,7 +165,7 @@ impl AgentRpcServer for RpcServer {
 
     async fn submit_voucher(
         &self,
-        _voucher_data: String,
+        voucher_data: String,
         agent_pubkey: String,
         nonce: u64,
     ) -> RpcResult<String> {
@@ -162,21 +173,38 @@ impl AgentRpcServer for RpcServer {
             .parse_pubkey(&agent_pubkey)
             .map_err(|e| jsonrpsee::types::error::ErrorObject::owned(400, e.to_string(), None::<()>))?;
 
+        // Decode the Base64 voucher (170-byte wire format).
+        let voucher = crate::voucher::decode_voucher_header(&voucher_data)
+            .map_err(|e| jsonrpsee::types::error::ErrorObject::owned(
+                400, format!("Invalid voucher: {}", e), None::<()>))?;
+
+        // Verify Ed25519 signature — this is the real gate.
+        voucher.verify_voucher()
+            .map_err(|e| jsonrpsee::types::error::ErrorObject::owned(
+                400, format!("Bad signature: {}", e), None::<()>))?;
+
+        // Verify the pubkey matches.
+        if voucher.agent != agent {
+            return Err(jsonrpsee::types::error::ErrorObject::owned(
+                400, "Agent pubkey mismatch", None::<()>));
+        }
+
+        // Verify the nonce matches.
+        if voucher.nonce != nonce {
+            return Err(jsonrpsee::types::error::ErrorObject::owned(
+                400, "Nonce mismatch", None::<()>));
+        }
+
+        // Acquire nonce in the state engine.
         let guard = self
             .state
             .try_acquire_nonce_sync(agent, nonce)
             .map_err(|e| jsonrpsee::types::error::ErrorObject::owned(409, e.to_string(), None::<()>))?;
 
-        // In a real implementation, we would validate and store the voucher data.
-        // For MVP, we promote to IntentSigned with a dummy signature.
-        let dummy_sig = [0u8; 64];
-        if let Err(e) = guard.commit(NoncePhase::IntentSigned(dummy_sig)) {
-            return Err(jsonrpsee::types::error::ErrorObject::owned(
-                500,
-                format!("State error: {}", e),
-                None::<()>,
-            ));
-        }
+        // Commit with the real voucher.
+        guard
+            .commit_with_voucher(NoncePhase::IntentSigned(voucher.signature), voucher)
+            .map_err(|e| jsonrpsee::types::error::ErrorObject::owned(500, e.to_string(), None::<()>))?;
 
         // Return an identifier for the voucher.
         Ok(format!("voucher-{}", nonce))
@@ -208,5 +236,19 @@ impl AgentRpcServer for RpcServer {
             .parse_pubkey(&agent_pubkey)
             .map_err(|e| jsonrpsee::types::error::ErrorObject::owned(400, e.to_string(), None::<()>))?;
         Ok(self.state.in_flight_count(&agent))
+    }
+
+    async fn should_buy_data(
+        &self,
+        current_confidence_bps: u64,
+        expected_after: u64,
+        data_cost_bps: u64,
+    ) -> RpcResult<bool> {
+        Ok(crate::decision::should_buy_data(
+            current_confidence_bps,
+            expected_after,
+            data_cost_bps,
+            10_000,
+        ))
     }
 }

@@ -1,5 +1,6 @@
 //! Agentic-Pay backend library crate.
 
+pub mod agent_loop;
 pub mod audit;
 pub mod client;
 pub mod config;
