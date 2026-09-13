@@ -16,7 +16,7 @@ export const store = configureStore({
 export type RootState = ReturnType<typeof store.getState>
 export type AppDispatch = typeof store.dispatch
 
-// Re-export all slice actions and selectors for single-import convenience
+// Re-export all slice actions, selectors, and typed hooks
 export * from "./slices/agentSlice"
 export * from "./slices/pythSlice"
-export * from "./hooks"
+export { useAppDispatch, useAppSelector } from "./hooks"

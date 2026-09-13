@@ -12,6 +12,7 @@ import {
   CANONICAL_MESSAGE_LEN,
   VOUCHER_TOTAL_LEN,
 } from "../src/voucher";
+import { usedNonces, sweepExpiredNonces, nonceKey } from "../src/paywall";
 
 describe("x402 Paywall & Resource Server Integration", () => {
   const providerKeypair = Keypair.generate();
@@ -225,6 +226,47 @@ describe("x402 Paywall & Resource Server Integration", () => {
 
       expect(res.status).toBe(402);
       expect(res.body.error).toBe("Insufficient payment amount");
+    });
+
+    it("rejects replayed voucher with the same nonce (409)", async () => {
+      const now = BigInt(Math.floor(Date.now() / 1000) + 60);
+      const { header } = signVoucher(
+        BigInt(99),
+        agentKeypair,
+        providerKeypair,
+        pricePerRequest,
+        now
+      );
+
+      // First request succeeds
+      const res1 = await request(app)
+        .get("/price/BTC")
+        .set("PAYMENT-SIGNATURE", header);
+      expect(res1.status).toBe(200);
+
+      // Second request with exact same voucher must be rejected
+      const res2 = await request(app)
+        .get("/price/BTC")
+        .set("PAYMENT-SIGNATURE", header);
+      expect(res2.status).toBe(409);
+      expect(res2.body.error).toBe("Nonce already used");
+    });
+
+    it("cleans up expired nonces on sweep", () => {
+      const past = Math.floor(Date.now() / 1000) - 10;
+      const future = Math.floor(Date.now() / 1000) + 60;
+      const testKey1 = "agent1:123";
+      const testKey2 = "agent2:456";
+
+      usedNonces.set(testKey1, past);
+      usedNonces.set(testKey2, future);
+
+      sweepExpiredNonces();
+
+      expect(usedNonces.has(testKey1)).toBe(false);
+      expect(usedNonces.has(testKey2)).toBe(true);
+
+      usedNonces.delete(testKey2);
     });
   });
 });

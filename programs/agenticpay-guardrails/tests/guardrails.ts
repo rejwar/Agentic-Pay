@@ -63,6 +63,18 @@ describe("agenticpay-guardrails", () => {
     return buf;
   }
 
+  function getNonceReceiptPda(nonce: anchor.BN): PublicKey {
+    const [pda] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("nonce"),
+        escrowPda.toBuffer(),
+        nonce.toArrayLike(Buffer, "le", 8),
+      ],
+      program.programId
+    );
+    return pda;
+  }
+
   before(async () => {
     // Derive Escrow PDA: [b"escrow", owner.pubkey]
     [escrowPda, escrowBump] = PublicKey.findProgramAddressSync(
@@ -85,9 +97,18 @@ describe("agenticpay-guardrails", () => {
       escrowPda,
       5 * anchor.web3.LAMPORTS_PER_SOL
     );
+    // Fund agent keypair with SOL so it can pay for nonce receipt rent
+    const airdropAgentSig = await provider.connection.requestAirdrop(
+      agentKeypair.publicKey,
+      2 * anchor.web3.LAMPORTS_PER_SOL
+    );
     const latestBlockhash = await provider.connection.getLatestBlockhash();
     await provider.connection.confirmTransaction({
       signature: airdropSig,
+      ...latestBlockhash,
+    });
+    await provider.connection.confirmTransaction({
+      signature: airdropAgentSig,
       ...latestBlockhash,
     });
   });
@@ -195,8 +216,10 @@ describe("agenticpay-guardrails", () => {
       )
       .accounts({
         escrow: escrowPda,
+        nonceReceipt: getNonceReceiptPda(nonce),
         provider: providerKeypair.publicKey,
         instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        payer: agentKeypair.publicKey,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
@@ -206,7 +229,7 @@ describe("agenticpay-guardrails", () => {
     );
 
     const tx = new Transaction().add(ed25519Ix).add(settleIx);
-    await provider.sendAndConfirm(tx);
+    await provider.sendAndConfirm(tx, [agentKeypair]);
 
     const providerBalAfter = await provider.connection.getBalance(
       providerKeypair.publicKey
@@ -218,6 +241,64 @@ describe("agenticpay-guardrails", () => {
 
     const escrow = await program.account.escrow.fetch(escrowPda);
     assert.equal(escrow.spentTodayLamports.toString(), amountLamports.toString());
+  });
+
+  it("Rejects a replayed voucher (nonce already consumed)", async () => {
+    const nonce = new anchor.BN(2001);
+    const amount = new anchor.BN(300_000);
+    const now = Math.floor(Date.now() / 1000);
+    const expiresAt = new anchor.BN(now + 300);
+
+    const canonical = createCanonicalMessage(
+      nonce,
+      agentKeypair.publicKey,
+      providerKeypair.publicKey,
+      amount,
+      expiresAt
+    );
+    const signature = nacl.sign.detached(canonical, agentKeypair.secretKey);
+
+    const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
+      publicKey: agentKeypair.publicKey.toBytes(),
+      message: canonical,
+      signature,
+      instructionIndex: 0,
+    });
+
+    // Derive the nonce receipt PDA.
+    const [nonceReceiptPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("nonce"), escrowPda.toBuffer(), nonce.toArrayLike(Buffer, "le", 8)],
+      program.programId
+    );
+
+    const settleIx = await program.methods
+      .batchSettleVouchers(canonical, providerKeypair.publicKey, amount, nonce, expiresAt)
+      .accounts({
+        escrow: escrowPda,
+        nonceReceipt: nonceReceiptPda,
+        provider: providerKeypair.publicKey,
+        instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        payer: agentKeypair.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+
+    // First submission: should succeed.
+    const tx1 = new Transaction().add(ed25519Ix).add(settleIx);
+    await provider.sendAndConfirm(tx1, [agentKeypair]);
+
+    // Second submission with the exact same voucher: must fail.
+    const tx2 = new Transaction().add(ed25519Ix).add(settleIx);
+    try {
+      await provider.sendAndConfirm(tx2, [agentKeypair]);
+      assert.fail("Replay should have been rejected");
+    } catch (err: any) {
+      expect(err.toString()).to.include("NonceAlreadyUsed");
+    }
+
+    // Confirm the receipt exists on-chain for external observability.
+    const receipt = await program.account.nonceReceipt.fetch(nonceReceiptPda);
+    assert.equal(receipt.nonce.toString(), nonce.toString());
   });
 
   it("Rejects voucher exceeding per-tx cap", async () => {
@@ -256,15 +337,17 @@ describe("agenticpay-guardrails", () => {
       )
       .accounts({
         escrow: escrowPda,
+        nonceReceipt: getNonceReceiptPda(nonce),
         provider: providerKeypair.publicKey,
         instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        payer: agentKeypair.publicKey,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
 
     const tx = new Transaction().add(ed25519Ix).add(settleIx);
     try {
-      await provider.sendAndConfirm(tx);
+      await provider.sendAndConfirm(tx, [agentKeypair]);
       assert.fail("Should have failed with PerTxCapExceeded");
     } catch (err: any) {
       expect(err.toString()).to.include("PerTxCapExceeded");
@@ -306,15 +389,17 @@ describe("agenticpay-guardrails", () => {
       )
       .accounts({
         escrow: escrowPda,
+        nonceReceipt: getNonceReceiptPda(nonce),
         provider: providerKeypair.publicKey,
         instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        payer: agentKeypair.publicKey,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
 
     const tx = new Transaction().add(ed25519Ix).add(settleIx);
     try {
-      await provider.sendAndConfirm(tx);
+      await provider.sendAndConfirm(tx, [agentKeypair]);
       assert.fail("Should have failed with VoucherExpired");
     } catch (err: any) {
       expect(err.toString()).to.include("VoucherExpired");
@@ -366,15 +451,17 @@ describe("agenticpay-guardrails", () => {
       )
       .accounts({
         escrow: escrowPda,
+        nonceReceipt: getNonceReceiptPda(nonce),
         provider: providerKeypair.publicKey,
         instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        payer: agentKeypair.publicKey,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
 
     const tx = new Transaction().add(ed25519Ix).add(settleIx);
     try {
-      await provider.sendAndConfirm(tx);
+      await provider.sendAndConfirm(tx, [agentKeypair]);
       assert.fail("Should have failed with Paused");
     } catch (err: any) {
       expect(err.toString()).to.include("Paused");
@@ -437,15 +524,17 @@ describe("agenticpay-guardrails", () => {
       )
       .accounts({
         escrow: escrowPda,
+        nonceReceipt: getNonceReceiptPda(nonce),
         provider: providerKeypair.publicKey,
         instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        payer: agentKeypair.publicKey,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
 
     const tx = new Transaction().add(ed25519Ix).add(settleIx);
     try {
-      await provider.sendAndConfirm(tx);
+      await provider.sendAndConfirm(tx, [agentKeypair]);
       assert.fail("Should have failed with MessageMismatch");
     } catch (err: any) {
       expect(err.toString()).to.include("MessageMismatch");
@@ -489,15 +578,17 @@ describe("agenticpay-guardrails", () => {
       )
       .accounts({
         escrow: escrowPda,
+        nonceReceipt: getNonceReceiptPda(nonce),
         provider: providerKeypair.publicKey,
         instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        payer: agentKeypair.publicKey,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
 
     const tx = new Transaction().add(ed25519Ix).add(settleIx);
     try {
-      await provider.sendAndConfirm(tx);
+      await provider.sendAndConfirm(tx, [agentKeypair]);
       assert.fail("Should have failed with AgentPubkeyMismatch");
     } catch (err: any) {
       expect(err.toString()).to.include("AgentPubkeyMismatch");
@@ -513,7 +604,7 @@ describe("agenticpay-guardrails", () => {
     // First settle up to remaining budget in increments of PER_TX_CAP
     const perTxCap = 2_000_000n;
     let currentRemaining = remaining;
-    let subNonce = 2000;
+    let subNonce = 3000;
 
     while (currentRemaining > perTxCap) {
       const payAmount = new anchor.BN(perTxCap.toString());
@@ -545,13 +636,15 @@ describe("agenticpay-guardrails", () => {
         )
         .accounts({
           escrow: escrowPda,
+          nonceReceipt: getNonceReceiptPda(n),
           provider: providerKeypair.publicKey,
           instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+          payer: agentKeypair.publicKey,
           systemProgram: SystemProgram.programId,
         })
         .instruction();
 
-      await provider.sendAndConfirm(new Transaction().add(ed25519Ix).add(settleIx));
+      await provider.sendAndConfirm(new Transaction().add(ed25519Ix).add(settleIx), [agentKeypair]);
       currentRemaining -= perTxCap;
     }
 
@@ -586,14 +679,16 @@ describe("agenticpay-guardrails", () => {
       )
       .accounts({
         escrow: escrowPda,
+        nonceReceipt: getNonceReceiptPda(finalNonce),
         provider: providerKeypair.publicKey,
         instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        payer: agentKeypair.publicKey,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
 
     try {
-      await provider.sendAndConfirm(new Transaction().add(ed25519Ix).add(settleIx));
+      await provider.sendAndConfirm(new Transaction().add(ed25519Ix).add(settleIx), [agentKeypair]);
       assert.fail("Should have failed with DailyCapExceeded");
     } catch (err: any) {
       expect(err.toString()).to.include("DailyCapExceeded");

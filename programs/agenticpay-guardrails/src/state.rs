@@ -29,6 +29,18 @@ impl SessionKey {
     pub const LEN: usize = 32 + 32 + 8 + 8 + 1;
 }
 
+#[account]
+pub struct NonceReceipt {
+    /// The nonce this receipt was created for.
+    pub nonce: u64,
+    /// Unix timestamp when the receipt was created.
+    pub created_at: i64,
+}
+
+impl NonceReceipt {
+    pub const LEN: usize = 8 + 8; // discriminator + nonce + created_at
+}
+
 #[event]
 pub struct VoucherSettled {
     pub nonce: u64,

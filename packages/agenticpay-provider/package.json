@@ -1,0 +1,55 @@
+{
+  "name": "@agenticpay/provider",
+  "version": "0.1.0",
+  "description": "Drop-in x402 paywall middleware for Solana AgenticPay vouchers",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "ts-mocha -p ./tsconfig.json -t 30000 tests/**/*.ts",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "x402",
+    "solana",
+    "agentic-pay",
+    "ai-agents",
+    "micropayments",
+    "ed25519"
+  ],
+  "dependencies": {
+    "@solana/web3.js": "^1.95.8",
+    "tweetnacl": "^1.0.3"
+  },
+  "peerDependencies": {
+    "express": "^4.18.0 || ^5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "express": {
+      "optional": true
+    }
+  },
+  "overrides": {
+    "rpc-websockets": {
+      "uuid": "^9.0.1"
+    }
+  },
+  "devDependencies": {
+    "@types/chai": "^4.3.11",
+    "@types/express": "^4.17.21",
+    "@types/mocha": "^10.0.6",
+    "@types/node": "^20.0.0",
+    "@types/supertest": "^6.0.0",
+    "chai": "^4.3.10",
+    "express": "^4.18.2",
+    "mocha": "^10.2.0",
+    "supertest": "^7.0.0",
+    "ts-mocha": "^10.0.0",
+    "typescript": "^5.3.3"
+  }
+}

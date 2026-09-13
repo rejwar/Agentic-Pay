@@ -101,6 +101,31 @@ agenticpay/
 │       ├── voucher_tests.rs
 │       └── integration_test.rs
 │
+├── packages/                          # ★ NEW — Phase 2
+│   └── agenticpay-provider/
+│       ├── package.json               # ★ NEW
+│       ├── tsconfig.json              # ★ NEW
+│       ├── README.md                  # ★ NEW
+│       ├── src/
+│       │   ├── index.ts               # ★ NEW — public exports
+│       │   ├── types.ts               # ★ NEW
+│       │   ├── errors.ts              # ★ NEW
+│       │   ├── voucher.ts             # ★ NEW — 105-byte canonical parser
+│       │   ├── nonce-store.ts         # ★ NEW — InMemoryNonceStore
+│       │   └── middleware.ts          # ★ NEW — Express factory
+│       ├── tests/
+│       │   └── middleware.test.ts     # ★ NEW — 9 tests
+│       └── examples/
+│           └── basic.ts               # ★ NEW
+│
+├── examples/                          # Reference provider implementations
+│   └── pyth-provider/
+│       ├── package.json
+│       ├── README.md
+│       └── src/
+│           ├── pyth.ts
+│           └── server.ts
+│
 ├── programs/agenticpay-guardrails/
 │       ├── Anchor.toml
 │       ├── Cargo.lock

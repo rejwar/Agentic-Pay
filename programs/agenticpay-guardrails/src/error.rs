@@ -18,4 +18,6 @@ pub enum GuardrailError {
     MessageMismatch,
     #[msg("Agent pubkey does not match the escrow's registered agent")]
     AgentPubkeyMismatch,
+    #[msg("Nonce has already been consumed")]
+    NonceAlreadyUsed,
 }

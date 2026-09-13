@@ -25,6 +25,25 @@ export interface PaywallConfig {
   voucherTtlSecs: number;
 }
 
+// A tiny TTL-bounded store is enough — nonces only need to be
+// remembered until their own voucher would've expired anyway.
+export const usedNonces = new Map<string, number>(); // key -> expiresAtSecs
+
+export function nonceKey(agent: Buffer, nonce: bigint): string {
+  return `${agent.toString("base64")}:${nonce.toString()}`;
+}
+
+export function sweepExpiredNonces() {
+  const now = Math.floor(Date.now() / 1000);
+  for (const [key, exp] of usedNonces) {
+    if (exp < now) usedNonces.delete(key);
+  }
+}
+const sweepInterval = setInterval(sweepExpiredNonces, 30_000);
+if (sweepInterval.unref) {
+  sweepInterval.unref();
+}
+
 /**
  * Initialize provider keypair from environment or generate a default one.
  */
@@ -120,7 +139,15 @@ export function createPaywallMiddleware(config: PaywallConfig) {
       return;
     }
 
-    // 7. Payment verified: attach voucher to request and proceed
+    // 7. Prevent replay attacks: verify nonce has not been used
+    const key = nonceKey(voucher.agent, voucher.nonce);
+    if (usedNonces.has(key)) {
+      res.status(409).json({ error: "Nonce already used" });
+      return;
+    }
+    usedNonces.set(key, Number(voucher.expiresAt));
+
+    // 8. Payment verified: attach voucher to request and proceed
     req.voucher = voucher;
     req.agentPubkey = bufferToPubkeyString(voucher.agent);
     next();
