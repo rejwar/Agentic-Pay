@@ -43,9 +43,11 @@ async fn test_worker_transaction_and_discriminator_integration() {
         &[b"escrow", agent_keypair.pubkey().as_ref()],
         &program_id,
     );
+    let payer = agent_keypair.pubkey();
     let settle_ix = build_batch_settle_instruction(
         &program_id,
         &escrow_pda,
+        &payer,
         &provider_pubkey,
         &voucher,
         &canonical,
@@ -53,9 +55,17 @@ async fn test_worker_transaction_and_discriminator_integration() {
 
     assert_eq!(settle_ix.program_id, program_id);
     assert_eq!(&settle_ix.data[..8], &BATCH_SETTLE_VOUCHERS_DISCRIMINATOR);
-    assert_eq!(settle_ix.accounts.len(), 4);
+    assert_eq!(settle_ix.accounts.len(), 6);
     assert_eq!(settle_ix.accounts[0].pubkey, escrow_pda);
-    assert_eq!(settle_ix.accounts[1].pubkey, Pubkey::new_from_array(provider_pubkey));
+    let (nonce_receipt_pda, _bump) = Pubkey::find_program_address(
+        &[b"nonce", escrow_pda.as_ref(), &voucher.nonce.to_le_bytes()],
+        &program_id,
+    );
+    assert_eq!(settle_ix.accounts[1].pubkey, nonce_receipt_pda);
+    assert_eq!(settle_ix.accounts[2].pubkey, Pubkey::new_from_array(provider_pubkey));
+    assert_eq!(settle_ix.accounts[3].pubkey, solana_sdk::sysvar::instructions::id());
+    assert_eq!(settle_ix.accounts[4].pubkey, payer);
+    assert_eq!(settle_ix.accounts[5].pubkey, solana_sdk::system_program::id());
 
     // 4. Verify SettlementWorker builds valid VersionedTransaction
     let state = Arc::new(ServerState::new(None));

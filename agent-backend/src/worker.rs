@@ -241,9 +241,11 @@ impl SettlementWorker {
             instructions.push(ed25519_ix);
 
             // 2. Anchor `batch_settle_vouchers` instruction.
+            let agent_pubkey = VoucherPayload::pubkey_from_bytes(&voucher.agent);
             let settle_ix = build_batch_settle_instruction(
                 &self.config.program_id,
                 &escrow_pda,
+                &agent_pubkey,
                 &voucher.provider,
                 voucher,
                 &canonical,
@@ -288,29 +290,26 @@ impl SettlementWorker {
 pub fn build_ed25519_instruction(
     agent: &[u8; 32],
     signature: &[u8; 64],
-    message: &[u8],
+    canonical_message: &[u8],
 ) -> SolanaInstruction {
-    new_ed25519_instruction_with_signature(message, signature, agent)
+    new_ed25519_instruction_with_signature(canonical_message, signature, agent)
 }
 
 /// Build the Anchor `batch_settle_vouchers` instruction.
 ///
-/// Instruction data layout (Borsh):
-///   discriminator (8 bytes)
-///   canonical_message: Vec<u8> (4-byte length + N bytes)
-///   provider: Pubkey (32 bytes)
-///   amount_lamports: u64 (8 bytes)
-///   nonce: u64 (8 bytes)
-///   expires_at: i64 (8 bytes)
+/// Build the Anchor `batch_settle_vouchers` instruction.
 ///
-/// Accounts (in order):
-///   0. escrow (writable, PDA)
-///   1. provider (writable)
-///   2. instructions_sysvar (readonly)
-///   3. system_program (readonly)
+/// Accounts expected by Anchor:
+///   0. escrow (mut, PDA)
+///   1. nonce_receipt (mut, PDA)
+///   2. provider (mut)
+///   3. instructions_sysvar (readonly)
+///   4. payer (signer, mut)  ← must be agent
+///   5. system_program (readonly)
 pub fn build_batch_settle_instruction(
     program_id: &Pubkey,
     escrow_pda: &Pubkey,
+    agent_pubkey: &Pubkey,
     provider: &[u8; 32],
     voucher: &VoucherPayload,
     canonical_message: &[u8],
@@ -343,11 +342,25 @@ pub fn build_batch_settle_instruction(
         .serialize(&mut data)
         .expect("i64 serialization cannot fail");
 
-    // Build account metas.
+    // Derive nonce receipt PDA: [b"nonce", escrow.key(), nonce.to_le_bytes()]
+    let (nonce_receipt_pda, _bump) = Pubkey::find_program_address(
+        &[b"nonce", escrow_pda.as_ref(), &voucher.nonce.to_le_bytes()],
+        program_id,
+    );
+
+    // Account order MUST match the anchor context:
+    // 1. escrow (writable, PDA)
+    // 2. nonce_receipt (writable, PDA)
+    // 3. provider (writable)
+    // 4. instructions_sysvar (readonly)
+    // 5. payer (signer, writable)  ← must be agent
+    // 6. system_program (readonly)
     let accounts = vec![
         AccountMeta::new(*escrow_pda, false),
+        AccountMeta::new(nonce_receipt_pda, false),
         AccountMeta::new(provider_pubkey, false),
         AccountMeta::new_readonly(INSTRUCTIONS_SYSVAR_ID, false),
+        AccountMeta::new(*agent_pubkey, true),
         AccountMeta::new_readonly(system_program::id(), false),
     ];
 
@@ -412,10 +425,12 @@ mod tests {
 
         let program_id = Pubkey::new_unique();
         let escrow_pda = Pubkey::new_unique();
+        let payer = Pubkey::new_unique();
 
         let ix = build_batch_settle_instruction(
             &program_id,
             &escrow_pda,
+            &payer,
             &provider,
             &voucher,
             &canonical,
@@ -433,11 +448,17 @@ mod tests {
         );
         assert_eq!(amount_bytes, voucher.amount_lamports);
         // Check accounts.
-        assert_eq!(ix.accounts.len(), 4);
+        assert_eq!(ix.accounts.len(), 6);
         assert_eq!(ix.accounts[0].pubkey, escrow_pda);
-        assert_eq!(ix.accounts[1].pubkey, Pubkey::new_from_array(provider));
-        assert_eq!(ix.accounts[2].pubkey, INSTRUCTIONS_SYSVAR_ID);
-        assert_eq!(ix.accounts[3].pubkey, system_program::id());
+        let (nonce_receipt_pda, _) = Pubkey::find_program_address(
+            &[b"nonce", escrow_pda.as_ref(), &voucher.nonce.to_le_bytes()],
+            &program_id,
+        );
+        assert_eq!(ix.accounts[1].pubkey, nonce_receipt_pda);
+        assert_eq!(ix.accounts[2].pubkey, Pubkey::new_from_array(provider));
+        assert_eq!(ix.accounts[3].pubkey, INSTRUCTIONS_SYSVAR_ID);
+        assert_eq!(ix.accounts[4].pubkey, payer);
+        assert_eq!(ix.accounts[5].pubkey, system_program::id());
     }
 
     #[test]

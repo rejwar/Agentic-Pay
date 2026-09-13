@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::sysvar::instructions::ID as INSTRUCTIONS_SYSVAR_ID;
 
-use crate::state::{Escrow, SessionKey};
+use crate::state::{Escrow, SessionKey, NonceReceipt};
 
 #[derive(Accounts)]
 pub struct InitializeEscrow<'info> {
@@ -47,6 +47,13 @@ pub struct RegisterSession<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(
+    canonical_message: Vec<u8>,
+    provider: Pubkey,
+    amount_lamports: u64,
+    nonce: u64,
+    expires_at: i64,
+)]
 pub struct BatchSettleVouchers<'info> {
     #[account(
         mut,
@@ -54,11 +61,30 @@ pub struct BatchSettleVouchers<'info> {
         bump = escrow.bump,
     )]
     pub escrow: Account<'info, Escrow>,
+
+    /// Replay-protection receipt. Creating this account is the mechanism
+    /// that prevents the same voucher from being settled twice.
+    #[account(
+        init_if_needed,
+        payer = payer,
+        space = 8 + NonceReceipt::LEN,
+        seeds = [b"nonce", escrow.key().as_ref(), &nonce.to_le_bytes()],
+        bump,
+    )]
+    pub nonce_receipt: Account<'info, NonceReceipt>,
+
     /// CHECK: provider receives lamports.
     #[account(mut)]
     pub provider: UncheckedAccount<'info>,
+
     /// CHECK: instructions sysvar for Ed25519 verification.
     #[account(address = INSTRUCTIONS_SYSVAR_ID)]
     pub instructions_sysvar: UncheckedAccount<'info>,
+
+    /// The fee payer for the receipt account creation.
+    /// Must be the escrow's registered agent.
+    #[account(mut, address = escrow.agent)]
+    pub payer: Signer<'info>,
+
     pub system_program: Program<'info, System>,
 }
