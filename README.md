@@ -264,4 +264,4 @@ x402 already processes the majority of its global transaction volume on Solana â
 
 ## License
 
-Apache License, Version 2.0 
+Apache License, Version 2.0.0
